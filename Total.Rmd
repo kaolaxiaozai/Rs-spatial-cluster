@@ -1,0 +1,2562 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(blockCV)
+library(raster)
+library(terra)
+library(sf)
+library(ggplot2)
+library(caret)
+library(Metrics)
+library(caret)
+library(randomForest)
+library(spatialEco)
+library(gstat)
+library(lme4)
+library(ggthemes)
+library(readr)
+library(dplyr)
+library(RColorBrewer)
+
+library(covWt)
+library(scales)
+```
+
+```{r}
+# import raster data
+library(maps)
+
+#awt <- borders("world", colour="gray50", fill="gray65")
+awt<-raster::brick("E:/论文下载_1/wc2.1_cruts4.06_10m_tmax_2020-2021/wc2.1_10m_tmax_2021-10.tif")
+#awt <- map(database = "world")
+#awt <- borders("world", colour="gray50", fill="gray65")
+#awt <- raster::brick("E:/学习资料/blockCV-v2.1.0/rvalavi-blockCV-3d5dae4/inst/extdata/awt.grd")
+
+# import data
+P <- read.csv("E:/论文/CEA/daima/Rs.csv")
+P$Measure_Year <- as.factor(P$Measure_Year)
+P$Measure_Month <- as.factor(P$Measure_Month)
+P$Climate_Koeppon <- as.factor(P$Climate_Koeppon)
+P$TopClimatetype <- as.factor(P$TopClimatetype)
+P$IGBP <- as.factor(P$IGBP)
+#RsForRandomForest$Country <- as.factor(RsForRandomForest$Country)
+#RsForRandomForest$SiteID <- as.factor(RsForRandomForest$SiteID)
+P$MiddleClimate <- as.factor(P$MiddleClimate)
+#RsForRandomForest$IGBP_FromPaper <- as.factor(RsForRandomForest$IGBP_FromPaper)
+#RsForRandomForest$Meas_Method <- as.factor(RsForRandomForest$Meas_Method)
+P$MYear <- as.factor(P$MYear)
+P$IGBP1 <- as.factor(P$IGBP1)
+
+# import  data
+PA <- read.csv("E:/论文/CEA/daima/RDRs.csv")
+PA$Measure_Year <- as.factor(PA$Measure_Year)
+PA$Measure_Month <- as.factor(PA$Measure_Month)
+PA$Climate_Koeppon <- as.factor(PA$Climate_Koeppon)
+PA$TopClimatetype <- as.factor(PA$TopClimatetype)
+PA$IGBP <- as.factor(PA$IGBP)
+#RsForRandomForest$Country <- as.factor(RsForRandomForest$Country)
+#RsForRandomForest$SiteID <- as.factor(RsForRandomForest$SiteID)
+PA$MiddleClimate <- as.factor(PA$MiddleClimate)
+#RsForRandomForest$IGBP_FromPaper <- as.factor(RsForRandomForest$IGBP_FromPaper)
+#RsForRandomForest$Meas_Method <- as.factor(RsForRandomForest$Meas_Method)
+PA$MYear <- as.factor(PA$MYear)
+PA$IGBP1 <- as.factor(PA$IGBP1)
+
+# import  data
+PB <- read.csv("E:/论文/CEA/daima/RandRs.csv")
+PB$Measure_Year <- as.factor(PB$Measure_Year)
+PB$Measure_Month <- as.factor(PB$Measure_Month)
+PB$Climate_Koeppon <- as.factor(PB$Climate_Koeppon)
+PB$TopClimatetype <- as.factor(PB$TopClimatetype)
+PB$IGBP <- as.factor(PB$IGBP)
+#RsForRandomForest$Country <- as.factor(RsForRandomForest$Country)
+#RsForRandomForest$SiteID <- as.factor(RsForRandomForest$SiteID)
+PB$MiddleClimate <- as.factor(PB$MiddleClimate)
+#RsForRandomForest$IGBP_FromPaper <- as.factor(RsForRandomForest$IGBP_FromPaper)
+#RsForRandomForest$Meas_Method <- as.factor(RsForRandomForest$Meas_Method)
+PB$MYear <- as.factor(PB$MYear)
+PB$IGBP1 <- as.factor(PB$IGBP1)
+
+set.seed (12345)
+train <- createDataPartition(y = PA$Rs_Norm,
+                             p =0.8,
+                             list = F,
+                             times = 1)
+
+TrainSet <- PA[train,]
+#Traindata <- RsForRandomForest[train,]
+ValidSet <- PA[-train,]
+
+# make a SpatialPointsDataFrame object from data.frame
+pa_data <- sf::st_as_sf(TrainSet, coords = c("Longitude", "Latitude"), crs = crs(awt))
+# see the first few rows
+pa_data
+
+# plot species data on the map
+plot(awt[[1]]) # plot raster data
+plot(pa_data, pch = 16, col="blue", add=TRUE) # add presence points
+#plot(pa_data[which(pa_data$Species==0), ], pch = 16, col="blue", add=TRUE) # add absence points
+#legend(x=500000, y=8250000, legend=c("Presence","Absence"), col=c(2, 4), pch=c(16,16), bty="n")
+```
+
+```{r}
+#Stratified sampling by latitude
+
+set.seed (2025)
+train <- createDataPartition(y = P$Latitude,
+                             p =0.8,
+                             list = F,
+                             times = 1)
+
+TrainSet1 <- P[train,]
+#Traindata <- RsForRandomForest[train,]
+ValidSet1 <- P[-train,]
+
+PT_data <- sf::st_as_sf(TrainSet1, coords = c("Longitude", "Latitude"), crs = crs(awt))
+# see the first few rows
+PT_data
+df <- as.data.frame(PT_data)
+```
+
+```{r}
+# 设置种子以确保结果的可重复性
+#set.seed(2025)
+
+# 初始化一个列表存储每次循环的平均准确率
+overall_rmse <- numeric(100)
+overall_ve <- numeric(100)
+
+# 开始循环100次
+for (j in 1:100) {
+  # 创建一个数据分区，用于十折交叉验证
+  folds <- createFolds(df$Rs_Norm, k = 10, list = TRUE, returnTrain = TRUE)
+  
+  # 初始化一个向量存储每折的准确率
+  fold_RMSE <- numeric(10)
+  fold_VE <- numeric(10)
+  # 开始十折交叉验证
+  for (i in seq_along(folds)) {
+    # 获取训练集和测试集
+    train_indices <- folds[[i]]
+    train_data <- df[train_indices, ]
+    test_data <- df[-train_indices, ]
+    
+    # 训练随机森林模型
+    rf_model <- randomForest(Rs_Norm ~ P_LastMonth   # + Measure_Month
+                        + Pm + Tm + absLog +absLat # + Climate_Koeppon 
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    predictions <- predict(rf_model, test_data)
+    
+    rmse <- rmse(test_data$Rs_Norm, predictions)
+
+    ve <- ve(test_data$Rs_Norm, predictions)
+    
+    # 计算预测准确率
+   # accuracy <- mean(predictions == test_data$Species)
+    
+    # 保存每折的准确率
+    fold_RMSE[i] <- rmse
+    fold_VE[i] <- ve
+  }
+  
+  # 计算当前循环的平均准确率并保存
+  overall_rmse[j] <- mean(fold_RMSE)
+  overall_ve[j] <- mean(fold_VE)
+}
+
+# 输出100次循环的结果
+cat("循环100次的十折交叉验证完成。\n")
+cat("每次循环的rmse：\n", overall_rmse, "\n")
+cat("每次循环的ve：\n", overall_ve, "\n")
+
+# 计算总体平均准确率和标准差
+final_average_rmse <- mean(overall_rmse)
+final_sd_rmse <- sd(overall_rmse)
+
+final_average_ve <- mean(overall_ve)
+final_sd_ve <- sd(overall_ve)
+
+cat("总体平均rmse：", final_average_rmse, "\n")
+cat("rmse的标准差为：", final_sd_rmse, "\n")
+
+cat("总体平均ve：", final_average_ve, "\n")
+cat("ve的标准差为：", final_sd_ve, "\n")
+
+# 可视化结果
+hist(overall_rmse, breaks = 10, main = "100次循环的平均rmse分布",
+     xlab = "平均rmse", col = "skyblue", border = "white")
+hist(overall_ve, breaks = 10, main = "100次循环的平均ve分布",
+     xlab = "平均ve", col = "skyblue", border = "white")
+```
+
+```{r}
+# 假设 overall_rmse 和 overall_ve 是向量
+output_file <- "result_summaryR.csv"
+
+# 将数据存入一个数据框
+result_df <- data.frame(
+  Iteration = seq_along(overall_rmse), # 循环的次数
+  RMSE = overall_rmse,                # 每次循环的 RMSE
+  VE = overall_ve                     # 每次循环的 VE
+)
+
+# 写入到 CSV 文件
+write.csv(result_df, file = output_file, row.names = FALSE)
+
+cat("结果已保存到 result_summaryR.csv 文件中。\n")
+
+```
+
+```{r}
+# 设置种子以确保结果的可重复性
+#set.seed(2025)
+
+# 初始化一个列表存储每次循环的平均准确率
+overall_rmse <- numeric(100)
+overall_ve <- numeric(100)
+
+# 开始循环100次
+for (j in 1:100) {
+  # 创建一个数据分区，用于十折交叉验证
+  folds <- createFolds(df$Rs_Norm, k = 10, list = TRUE, returnTrain = TRUE)
+  
+  # 初始化一个向量存储每折的准确率
+  fold_RMSE <- numeric(10)
+  fold_VE <- numeric(10)
+  # 开始十折交叉验证
+  for (i in seq_along(folds)) {
+    # 获取训练集和测试集
+    train_indices <- folds[[i]]
+    train_data <- df[train_indices, ]
+    test_data <- df[-train_indices, ]
+    
+    # 训练随机森林模型
+    rf_model <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month  
+                        + Pm + Tm + absLog +absLat # + Climate_Koeppon 
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    predictions <- predict(rf_model, train_data)
+    
+    #calculate out-of-bag residuals
+      train_data$res <- train_data$Rs_Norm - predictions
+      #convert to sp class
+      #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+      #crs(df_spat) <- crs(awt)
+      
+      df_spat_sf <- st_as_sf(train_data, coords = c("X", "Y"))
+      kde <- sf.kde(x = df_spat_sf ,res =0.2 ,scale.factor = 1000)
+      
+      points_sf <- train_data[c(40,41)]  # 使用你的输入样本点
+
+      # 提取点对应的 KDE 值
+      point <- terra::extract(kde, points_sf)
+
+      point1 <- na.omit(point)
+      #point[is.na(point)] <- 0.5
+      point[is.na(point)] <- median(point1$z)
+      wt<-point
+      min(wt)
+      max(wt)
+      # 查看结果
+      #print(wt)
+
+      # wt <- terra::extract(kde, df_spat_sf)
+      #scale with respect to the minimum
+      wt <- min(wt)/wt
+      max(wt)
+      min(wt)
+      #wt[is.na(wt)] <- 0.1
+      train_data$wt <-wt$z
+      
+    rfK <- randomForest(Rs_Norm ~ P_LastMonth   # + Measure_Month 
+                        + Pm + Tm + absLog +absLat # + Climate_Koeppon 
+                       + LAI  + Elevation, data = train_data,weights = train_data$wt, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    predictions <- predict(rfK, test_data)
+    
+    rmse <- rmse(test_data$Rs_Norm, predictions)
+
+    ve <- ve(test_data$Rs_Norm, predictions)
+    
+    # 计算预测准确率
+   # accuracy <- mean(predictions == test_data$Species)
+    
+    # 保存每折的准确率
+    fold_RMSE[i] <- rmse
+    fold_VE[i] <- ve
+  }
+  
+  # 计算当前循环的平均准确率并保存
+  overall_rmse[j] <- mean(fold_RMSE)
+  overall_ve[j] <- mean(fold_VE)
+}
+
+# 输出100次循环的结果
+cat("循环100次的十折交叉验证完成。\n")
+cat("每次循环的rmse：\n", overall_rmse, "\n")
+cat("每次循环的ve：\n", overall_ve, "\n")
+
+# 计算总体平均准确率和标准差
+final_average_rmse <- mean(overall_rmse)
+final_sd_rmse <- sd(overall_rmse)
+
+final_average_ve <- mean(overall_ve)
+final_sd_ve <- sd(overall_ve)
+
+cat("总体平均rmse：", final_average_rmse, "\n")
+cat("rmse的标准差为：", final_sd_rmse, "\n")
+
+cat("总体平均ve：", final_average_ve, "\n")
+cat("ve的标准差为：", final_sd_ve, "\n")
+
+# 可视化结果
+hist(overall_rmse, breaks = 10, main = "100次循环的平均rmse分布",
+     xlab = "平均rmse", col = "skyblue", border = "white")
+hist(overall_ve, breaks = 10, main = "100次循环的平均ve分布",
+     xlab = "平均ve", col = "skyblue", border = "white")
+```
+
+```{r}
+# 假设 overall_rmse 和 overall_ve 是向量
+output_file <- "result_summaryK.csv"
+
+# 将数据存入一个数据框
+result_df <- data.frame(
+  Iteration = seq_along(overall_rmse), # 循环的次数
+  RMSE = overall_rmse,                # 每次循环的 RMSE
+  VE = overall_ve                     # 每次循环的 VE
+)
+
+# 写入到 CSV 文件
+write.csv(result_df, file = output_file, row.names = FALSE)
+
+cat("结果已保存到 result_summaryK.csv 文件中。\n")
+```
+
+```{r}
+# 设置种子以确保结果的可重复性
+#set.seed(2025)
+
+# 初始化一个列表存储每次循环的平均准确率
+overall_rmse <- numeric(100)
+overall_ve <- numeric(100)
+
+# 开始循环100次
+for (j in 1:100) {
+  # 创建一个数据分区，用于十折交叉验证
+  folds <- createFolds(df$Rs_Norm, k = 10, list = TRUE, returnTrain = TRUE)
+  
+  # 初始化一个向量存储每折的准确率
+  fold_RMSE <- numeric(10)
+  fold_VE <- numeric(10)
+  # 开始十折交叉验证
+  for (i in seq_along(folds)) {
+    # 获取训练集和测试集
+    train_indices <- folds[[i]]
+    train_data <- df[train_indices, ]
+    test_data <- df[-train_indices, ]
+    
+    # 训练随机森林模型
+    rf_model <- randomForest(Rs_Norm ~ P_LastMonth   # + Measure_Month  
+                        + Pm + Tm + absLog +absLat # + Climate_Koeppon 
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    predictions <- predict(rf_model, train_data)
+    
+    #calculate out-of-bag residuals
+      train_data$res <- train_data$Rs_Norm - predictions
+      #convert to sp class
+      #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+      #crs(df_spat) <- crs(awt)
+      
+      res <- data.frame(
+                        x = train_data$X,
+                        y = train_data$Y,
+                        res = train_data$Rs_Norm - predictions
+                        )
+
+       #calculate out-of-bag residuals
+#      df$res <- df$Rs_Norm - predict(rf, df)
+      #convert to sp class
+#      df_spat <- df; coordinates(df_spat) = ~X+Y
+      
+      v <- variogram(object = res~1, locations = ~x+y, data = res, cutoff = 360)
+
+      #try fitting an exponential model
+      fit <- fit.variogram(v, model = vgm("Exp"))
+      # plot(v, fit)
+      
+     # Automatically fit the best variogram model (Gau, Exp, Sph)
+     #models <- c("Sph", "Gau", "Exp")
+  #   best_fit <- NULL
+   #  best_sse <- Inf
+
+  #   for (m in models) {
+  #      fit <- tryCatch(
+  #             {
+   #              fit.variogram(v, model = vgm(m))  # 添加初始值
+   #            },
+   #              error = function(e) NULL
+   #     )
+  
+     # 绘制拟合结果以便检查
+  #     if (!is.null(fit)) {
+  #            plot(v, fit, main = paste("Fitting", model))
+  #     }
+  
+     # 检查拟合结果是否有效
+  #     if (!is.null(fit) && !is.na(attr(fit, "SSErr"))) {
+  #     sse <- attr(fit, "SSErr")
+  #     if (sse < best_sse) {
+ #           best_fit <- fit
+ #            best_sse <- sse
+  #           }
+  #      }
+  #   }
+      #calculate distance matrix between sample points
+      d = dist(train_data[ ,c("X", "Y")])
+ #     wtP <- covWt(dmat = d, model = best_fit)
+      wtP <- covWt(dmat = d, model = fit)
+      train_data$wtP <- wtP
+      
+    rfP <- randomForest(Rs_Norm ~ P_LastMonth # + Measure_Month   
+                        + Pm + Tm + absLog +absLat # + Climate_Koeppon 
+                       + LAI  + Elevation, data = train_data,weights = train_data$wtP, mtry=3, importance=TRUE, ntree=500)
+     # 对测试集进行预测
+    predictions <- predict(rfP, test_data)
+    
+    rmse <- rmse(test_data$Rs_Norm, predictions)
+
+    ve <- ve(test_data$Rs_Norm, predictions)
+    
+    # 计算预测准确率
+   # accuracy <- mean(predictions == test_data$Species)
+    
+    # 保存每折的准确率
+    fold_RMSE[i] <- rmse
+    fold_VE[i] <- ve
+  }
+  
+  # 计算当前循环的平均准确率并保存
+  overall_rmse[j] <- mean(fold_RMSE)
+  overall_ve[j] <- mean(fold_VE)
+}
+
+# 输出100次循环的结果
+cat("循环100次的十折交叉验证完成。\n")
+cat("每次循环的rmse：\n", overall_rmse, "\n")
+cat("每次循环的ve：\n", overall_ve, "\n")
+
+# 计算总体平均准确率和标准差
+final_average_rmse <- mean(overall_rmse)
+final_sd_rmse <- sd(overall_rmse)
+
+final_average_ve <- mean(overall_ve)
+final_sd_ve <- sd(overall_ve)
+
+cat("总体平均rmse：", final_average_rmse, "\n")
+cat("rmse的标准差为：", final_sd_rmse, "\n")
+
+cat("总体平均ve：", final_average_ve, "\n")
+cat("ve的标准差为：", final_sd_ve, "\n")
+
+# 可视化结果
+hist(overall_rmse, breaks = 10, main = "100次循环的平均rmse分布",
+     xlab = "平均rmse", col = "skyblue", border = "white")
+hist(overall_ve, breaks = 10, main = "100次循环的平均ve分布",
+     xlab = "平均ve", col = "skyblue", border = "white")
+```
+
+```{r}
+# 假设 overall_rmse 和 overall_ve 是向量
+output_file <- "result_summaryP.csv"
+
+# 将数据存入一个数据框
+result_df <- data.frame(
+  Iteration = seq_along(overall_rmse), # 循环的次数
+  RMSE = overall_rmse,                # 每次循环的 RMSE
+  VE = overall_ve                     # 每次循环的 VE
+)
+
+# 写入到 CSV 文件
+write.csv(result_df, file = output_file, row.names = FALSE)
+
+cat("结果已保存到 result_summaryP.csv 文件中。\n")
+```
+
+```{r}
+set.seed(20250110)
+# 训练随机森林模型
+    rf_modelT <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm   #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+# 对测试集进行预测
+    pre1 <- predict(rf_modelT,TrainSet1)
+    # 对测试集进行预测
+    pre2 <- predict(rf_modelT, ValidSet1)
+    importance_scoresT <- importance(rf_modelT)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = pre1), "TrainSet_PredictionsT.csv", row.names = FALSE)
+
+   # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = pre2), "ValidSet_PredictionsT.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresT,"importanceT.csv")
+    
+     rmse(TrainSet1$Rs_Norm, pre1)
+     rmse(ValidSet1$Rs_Norm, pre2)
+
+     ve(TrainSet1$Rs_Norm, pre1)
+     ve(ValidSet1$Rs_Norm, pre2)
+```
+
+```{r}
+feature_importance <- data.frame(ID = rownames(importance_scoresT), Importance = importance_scoresT[, "IncNodePurity"])
+feature_importance
+
+importance <- feature_importance[order(-feature_importance$Importance), ]
+importance
+
+importance_gini <- importance(rf_modelT, type = 2)
+importance_gini
+
+gini<- data.frame(ID = rownames(importance_scoresT), Importance = importance_gini[, "IncNodePurity"])
+gini
+
+# 基于准确度的特征重要性
+importance_accuracy <- importance(rf_modelT,type = 1)
+importance_accuracy
+accuracy<- data.frame(ID = rownames(importance_scoresT), Importance = importance_accuracy[, "%IncMSE"])
+accuracy
+# 绘制柱状图
+
+p1<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance)) +  geom_bar(stat = "identity", fill = "steelblue") +  theme_few() +   theme(plot.title = element_text(hjust = 0.5, size = 16),         plot.caption = element_text(size = 12),         axis.text = element_text(size = 12),         axis.title = element_text(size = 15))+  labs(title = " Important", x = "ID", y = "Importance") +  coord_flip() # 横向柱状图更易读
+p1
+color_range <- c("#D8BFD8", "#8B008B")
+p2<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance)) +  geom_bar(stat = "identity") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p2
+
+#在图上加上数字
+p3<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + # 添加标签  
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p3
+
+# 环状图
+p4<-ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  
+ # ylim(-18,15) +  
+  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + 
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   
+  theme(    
+    plot.title = element_text(hjust = 0.5, size = 10),     
+    plot.caption = element_text(size = 12),     
+    axis.text = element_text(size = 10),     
+    axis.title = element_text(size = 8)  ) +  
+  labs(title = "Important", x = "ID", y = "Importance") +  
+  coord_polar()
+p4
+
+# 绘制基于基尼指数的特征重要性图
+p5<-plot_gini <- ggplot(gini, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Gini Index)", x = "ID", y = "Importance") +  coord_flip()
+p5
+# 绘制基于准确度的特征重要性图
+p6<-plot_accuracy <- ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Accuracy)", x = "ID", y = "Importance") +  coord_flip()
+p6
+
+     # 导出为 PNG 格式
+ggsave("p4_T.png", plot = p4, width = 8, height = 6, dpi = 300)
+
+# 或者导出为 PDF 格式
+ggsave("p4_T.pdf", plot = p4, width = 8, height = 6)
+```
+
+
+```{r}
+set.seed(20250110)
+# 训练随机森林模型
+    rf_modelF <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm   + absLog +absLat # + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+# 对测试集进行预测
+    preT <- predict(rf_modelF,TrainSet1)
+    # 对测试集进行预测
+    preV <- predict(rf_modelF, ValidSet1)
+    importance_scoresF <- importance(rf_modelF)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preT), "TrainSet_Predictions.csv", row.names = FALSE)
+
+   # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preV), "ValidSet_Predictions.csv", row.names = FALSE)
+
+#    write.csv(importance_scores,"importance.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preT)
+     rmse(ValidSet1$Rs_Norm, preV)
+
+     ve(TrainSet1$Rs_Norm, preT)
+     ve(ValidSet1$Rs_Norm, preV)
+```
+
+
+```{r}
+feature_importance <- data.frame(ID = rownames(importance_scoresF), Importance = importance_scoresF[, "IncNodePurity"])
+feature_importance
+
+importance <- feature_importance[order(-feature_importance$Importance), ]
+importance
+
+importance_gini <- importance(rf_modelF, type = 2)
+importance_gini
+
+gini<- data.frame(ID = rownames(importance_scoresF), Importance = importance_gini[, "IncNodePurity"])
+gini
+
+# 基于准确度的特征重要性
+importance_accuracy <- importance(rf_modelF,type = 1)
+importance_accuracy
+accuracy<- data.frame(ID = rownames(importance_scoresF), Importance = importance_accuracy[, "%IncMSE"])
+accuracy
+# 绘制柱状图
+
+p1<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance)) +  geom_bar(stat = "identity", fill = "steelblue") +  theme_few() +   theme(plot.title = element_text(hjust = 0.5, size = 16),         plot.caption = element_text(size = 12),         axis.text = element_text(size = 12),         axis.title = element_text(size = 15))+  labs(title = " Important", x = "ID", y = "Importance") +  coord_flip() # 横向柱状图更易读
+p1
+color_range <- c("#D8BFD8", "#8B008B")
+p2<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance)) +  geom_bar(stat = "identity") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p2
+
+#在图上加上数字
+p3<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + # 添加标签  
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p3
+
+# 环状图
+p4<-ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  
+ # ylim(-18,15) +  
+  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + 
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   
+  theme(    
+    plot.title = element_text(hjust = 0.5, size = 10),     
+    plot.caption = element_text(size = 12),     
+    axis.text = element_text(size = 10),     
+    axis.title = element_text(size = 8)  ) +  
+  labs(title = "Important", x = "ID", y = "Importance") +  
+  coord_polar()
+p4
+
+# 绘制基于基尼指数的特征重要性图
+p5<-plot_gini <- ggplot(gini, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Gini Index)", x = "ID", y = "Importance") +  coord_flip()
+p5
+# 绘制基于准确度的特征重要性图
+p6<-plot_accuracy <- ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Accuracy)", x = "ID", y = "Importance") +  coord_flip()
+p6
+     # 导出为 PNG 格式
+ggsave("p4_F.png", plot = p4, width = 8, height = 6, dpi = 300)
+
+# 或者导出为 PDF 格式
+ggsave("p4_F.pdf", plot = p4, width = 8, height = 6)
+```
+
+
+```{r}
+set.seed(20250110)
+    # 训练随机森林模型
+    rf_modelK <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month  
+                        + Pm + Tm   + absLog +absLat #+ Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+    # 对测试集进行预测
+    predictions <- predict(rf_modelK)
+    
+    #calculate out-of-bag residuals
+    TrainSet1$res <- TrainSet1$Rs_Norm - predictions
+    #convert to sp class
+    #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+    #crs(df_spat) <- crs(awt)
+      
+    df_spat_sf <- st_as_sf(TrainSet1, coords = c("X", "Y"))
+    
+    kde <- sf.kde(x = df_spat_sf,bw=62, res =0.1 ,scale.factor = 10000)
+    #kde5 <- sf.kde(x = df_spat_sf, res =0.5 ,scale.factor = 10000)
+    # Extract raster values
+    #kde_values <- raster::values(kde5)
+   # write.csv(kde_values,"kde_values.csv")
+   # # Extract coordinates of each raster cell (grid)
+   # kde_coords <- raster::xyFromCell(kde5, 1:ncell(kde5))
+
+    # Combine coordinates and values into a data frame
+    #kde_df <- data.frame(x = kde_coords[,1], y = kde_coords[,2], density = kde_values)
+
+    #kde_values <- raster::values(kde)
+    #write.csv(kde_df,"kde_df.csv")
+      
+    points_sf <- TrainSet1[c(40,41)]  # 使用你的输入样本点
+
+    # 提取点对应的 KDE 值
+    point <- terra::extract(kde, points_sf)
+
+    point1 <- na.omit(point)
+    #point[is.na(point)] <- 0.5
+    point[is.na(point)] <- min(point1$z)
+    wt<-point
+    min(wt)
+    max(wt)
+    # 查看结果
+    #print(wt)
+
+    # wt <- terra::extract(kde, df_spat_sf)
+    #scale with respect to the minimum
+    wt <- min(wt)/wt
+    max(wt)
+    min(wt)
+    #wt[is.na(wt)] <- 0.1
+    TrainSet1$wt <-wt$z
+      
+    rfPK <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm  + absLog +absLat #+ Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1,weights = TrainSet1$wt, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    #predictions <- predict(rfPK, ValidSet1)
+    
+    #rmse <- rmse(ValidSet1$Rs_Norm, predictions)
+
+    #ve <- ve(ValidSet1$Rs_Norm, predictions)
+    # 对测试集进行预测
+    preTK <- predict(rfPK, TrainSet1)
+    # 对测试集进行预测
+    preVK <- predict(rfPK, ValidSet1)
+    importance_scoresK <- importance(rfPK)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preTK), "TrainSet_PredictionsK.csv", row.names = FALSE)
+
+    # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preVK), "ValidSet_PredictionsK.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresK,"importanceK.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preTK)
+     rmse(ValidSet1$Rs_Norm, preVK)
+
+     ve(TrainSet1$Rs_Norm, preTK)
+     ve(ValidSet1$Rs_Norm, preVK)
+```
+
+```{r}
+feature_importance <- data.frame(ID = rownames(importance_scoresK), Importance = importance_scoresK[, "IncNodePurity"])
+feature_importance
+
+importance <- feature_importance[order(-feature_importance$Importance), ]
+importance
+
+importance_gini <- importance(rfPK, type = 2)
+importance_gini
+
+gini<- data.frame(ID = rownames(importance_scoresK), Importance = importance_gini[, "IncNodePurity"])
+gini
+
+# 基于准确度的特征重要性
+importance_accuracy <- importance(rfPK,type = 1)
+importance_accuracy
+accuracy<- data.frame(ID = rownames(importance_scoresK), Importance = importance_accuracy[, "%IncMSE"])
+accuracy
+# 绘制柱状图
+
+p1<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance)) +  geom_bar(stat = "identity", fill = "steelblue") +  theme_few() +   theme(plot.title = element_text(hjust = 0.5, size = 16),         plot.caption = element_text(size = 12),         axis.text = element_text(size = 12),         axis.title = element_text(size = 15))+  labs(title = " Important", x = "ID", y = "Importance") +  coord_flip() # 横向柱状图更易读
+p1
+color_range <- c("#D8BFD8", "#8B008B")
+p2<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance)) +  geom_bar(stat = "identity") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p2
+
+#在图上加上数字
+p3<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + # 添加标签  
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p3
+
+# 环状图
+p4<-ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  
+ # ylim(-18,15) +  
+  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + 
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   
+  theme(    
+    plot.title = element_text(hjust = 0.5, size = 10),     
+    plot.caption = element_text(size = 12),     
+    axis.text = element_text(size = 10),     
+    axis.title = element_text(size = 8)  ) +  
+  labs(title = "Important", x = "ID", y = "Importance") +  
+  coord_polar()
+p4
+
+# 绘制基于基尼指数的特征重要性图
+p5<-plot_gini <- ggplot(gini, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Gini Index)", x = "ID", y = "Importance") +  coord_flip()
+p5
+# 绘制基于准确度的特征重要性图
+p6<-plot_accuracy <- ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Accuracy)", x = "ID", y = "Importance") +  coord_flip()
+p6
+
+     # 导出为 PNG 格式
+ggsave("p4_K.png", plot = p4, width = 8, height = 6, dpi = 300)
+
+# 或者导出为 PDF 格式
+ggsave("p4_K.pdf", plot = p4, width = 8, height = 6)
+```
+
+
+```{r}
+set.seed(20250110)
+    # 训练随机森林模型
+    rf_modelC <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm+ absLog +absLat # + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+    # 对测试集进行预测
+    predictions <- predict(rf_modelC)
+    
+   #calculate out-of-bag residuals
+      TrainSet1$res <- TrainSet1$Rs_Norm - predictions
+      #convert to sp class
+      #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+      #crs(df_spat) <- crs(awt)
+      
+      res <- data.frame(
+                        x = TrainSet1$X,
+                        y = TrainSet1$Y,
+                        res = TrainSet1$Rs_Norm - predictions
+                        )
+
+       #calculate out-of-bag residuals
+#      df$res <- df$Rs_Norm - predict(rf, df)
+      #convert to sp class
+#      df_spat <- df; coordinates(df_spat) = ~X+Y
+      
+      v <- variogram(object = res~1, locations = ~x+y, data = res, cutoff = 360)
+
+      #try fitting an exponential model
+      #fit <- fit.variogram(v, model = vgm("Exp"))
+      # plot(v, fit)
+      
+     #Automatically fit the best variogram model (Gau, Exp, Sph)
+     models <- c("Sph", "Gau", "Exp")
+     best_fit <- NULL
+     best_sse <- Inf
+
+     for (m in models) {
+        fit <- tryCatch(
+               {
+                 fit.variogram(v, model = vgm(m))  # 添加初始值
+               },
+                error = function(e) NULL
+        )
+  
+     # 绘制拟合结果以便检查
+       if (!is.null(fit)) {
+             plot(v, fit, main = paste("Fitting", model))
+       }
+  
+     # 检查拟合结果是否有效
+       if (!is.null(fit) && !is.na(attr(fit, "SSErr"))) {
+       sse <- attr(fit, "SSErr")
+       if (sse < best_sse) {
+            best_fit <- fit
+             best_sse <- sse
+             }
+        }
+     }
+      #calculate distance matrix between sample points
+      d = dist(TrainSet1[ ,c("X", "Y")])
+      wtP <- covWt(dmat = d, model = best_fit)
+      #wtP <- covWt(dmat = d, model = fit)
+      TrainSet1$wtP <- wtP
+      #write.csv(TrainSet1,"TrainSet.csv")
+    rfPC <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm + absLog +absLat  #+ Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1,weights = TrainSet1$wtP, mtry=3, importance=TRUE, ntree=500)
+     # 对测试集进行预测
+    #prePC <- predict(rfP, ValidSet1)
+    
+    #rmse <- rmse(ValidSet1$Rs_Norm, predictions)
+
+    #ve <- ve(ValidSet1$Rs_Norm, predictions)
+    # 对测试集进行预测
+    preTC <- predict(rfPC, TrainSet1)
+    # 对测试集进行预测
+    preVC <- predict(rfPC, ValidSet1)
+    importance_scoresC <- importance(rfPC)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preTC), "TrainSet_PredictionsC.csv", row.names = FALSE)
+
+    # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preVC), "ValidSet_PredictionsC.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresC,"importanceC.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preTC)
+     rmse(ValidSet1$Rs_Norm, preVC)
+
+     ve(TrainSet1$Rs_Norm, preTC)
+     ve(ValidSet1$Rs_Norm, preVC)
+     
+
+```
+
+```{r}
+feature_importance <- data.frame(ID = rownames(importance_scoresC), Importance = importance_scoresC[, "IncNodePurity"])
+feature_importance
+
+importance <- feature_importance[order(-feature_importance$Importance), ]
+importance
+
+importance_gini <- importance(rfPC, type = 2)
+importance_gini
+
+gini<- data.frame(ID = rownames(importance_scoresC), Importance = importance_gini[, "IncNodePurity"])
+gini
+
+# 基于准确度的特征重要性
+importance_accuracy <- importance(rfPC,type = 1)
+importance_accuracy
+accuracy<- data.frame(ID = rownames(importance_scoresC), Importance = importance_accuracy[, "%IncMSE"])
+accuracy
+# 绘制柱状图
+
+p1<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance)) +  geom_bar(stat = "identity", fill = "steelblue") +  theme_few() +   theme(plot.title = element_text(hjust = 0.5, size = 16),         plot.caption = element_text(size = 12),         axis.text = element_text(size = 12),         axis.title = element_text(size = 15))+  labs(title = " Important", x = "ID", y = "Importance") +  coord_flip() # 横向柱状图更易读
+p1
+color_range <- c("#D8BFD8", "#8B008B")
+p2<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance)) +  geom_bar(stat = "identity") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p2
+
+#在图上加上数字
+p3<-ggplot(importance, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + # 添加标签  
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   theme(    plot.title = element_text(hjust = 0.5, size = 16),     plot.caption = element_text(size = 12),     axis.text = element_text(size = 12),     axis.title = element_text(size = 15)  ) +  labs(title = "Important", x = "ID", y = "Importance") +  coord_flip()
+p3
+
+# 环状图
+p4<-ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  
+ # ylim(-18,15) +  
+  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") + 
+  scale_fill_gradient(low = color_range[1], high = color_range[2]) + # 使用渐变填充  
+  theme_few() +   
+  theme(    
+    plot.title = element_text(hjust = 0.5, size = 10),     
+    plot.caption = element_text(size = 12),     
+#    axis.text = element_text(size = 10),     
+#    axis.title = element_text(size = 8)  
+     ) +  
+#  labs(title = "Important", x = "ID", y = "Importance") +  
+  coord_polar()
+p4
+
+# 绘制基于基尼指数的特征重要性图
+p5<-plot_gini <- ggplot(gini, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Gini Index)", x = "ID", y = "Importance") +  coord_flip()
+p5
+# 绘制基于准确度的特征重要性图
+p6<-plot_accuracy <- ggplot(accuracy, aes(x = reorder(ID, Importance), y = Importance, fill = Importance, label = round(Importance, 2))) +  geom_bar(stat = "identity") +  geom_text(size = 3, position = position_stack(vjust = 0.5), color = "white") +  scale_fill_gradient(low = color_range[1], high = color_range[2]) +  theme_few() +  theme(    plot.title = element_text(hjust = 0.5, size = 16),    plot.caption = element_text(size = 12),    axis.text = element_text(size = 12),    axis.title = element_text(size = 15)  ) +  labs(title = "Feature Importance (Accuracy)", x = "ID", y = "Importance") +  coord_flip()
+p6
+
+# 导出为 PNG 格式
+#ggsave("p4_C.png", plot = p4, width = 8, height = 6, dpi = 300)
+
+# 或者导出为 PDF 格式
+#ggsave("p4_C.pdf", plot = p4, width = 8, height = 6)
+
+```
+
+```{r}
+#Comparing randomised and stratified divisions
+
+set.seed(20250110)
+# 训练随机森林模型
+    rf_modelF <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month + #TS  
+                        + Pm + Tm+ absLog +absLat# + Climate_Koeppon # 
+                         # + IGBP #+ T_LastMonth
+                       + LAI  + Elevation, data = PA, mtry=3, importance=TRUE, ntree=500)
+# 对测试集进行预测
+    preT <- predict(rf_modelF, PA)
+    # 对测试集进行预测
+    preV <- predict(rf_modelF, PB)
+    importance_scores <- importance(rf_modelF)
+    # 保存训练集预测结果
+   # write.csv(data.frame(Original = PA$Rs_Norm, Predicted = preT), "TrainSet_Predictions.csv", row.names = FALSE)
+
+   # 保存验证集预测结果
+  #  write.csv(data.frame(Original = PB$Rs_Norm, Predicted = preV), "ValidSet_Predictions.csv", row.names = FALSE)
+
+ #   write.csv(importance_scores,"importance.csv")
+    
+     rmse(PA$Rs_Norm, preT)
+     rmse(PB$Rs_Norm, preV)
+
+     ve(PA$Rs_Norm, preT)
+     ve(PB$Rs_Norm, preV)
+```
+
+```{r}
+#Comparing randomised and stratified divisions
+set.seed(20250110)
+    # 训练随机森林模型
+    rf_modelK <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month   
+                        + Pm + Tm + absLog +absLat# + Climate_Koeppon 
+                       + LAI  + Elevation, data = PA, mtry=3, importance=TRUE, ntree=500)
+    # 对测试集进行预测
+    predictions <- predict(rf_modelK)
+    
+    #calculate out-of-bag residuals
+    PA$res <- PA$Rs_Norm - predictions
+    #convert to sp class
+    #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+    #crs(df_spat) <- crs(awt)
+      
+    df_spat_sf <- st_as_sf(PA, coords = c("Longitude", "Latitude"))
+    kde <- sf.kde(x = df_spat_sf ,res =0.2 ,scale.factor = 1000)
+      
+    points_sf <- PA[c(40,41)]  # 使用你的输入样本点
+
+    # 提取点对应的 KDE 值
+    point <- terra::extract(kde, points_sf)
+
+    point1 <- na.omit(point)
+    #point[is.na(point)] <- 0.5
+    point[is.na(point)] <- median(point1$z)
+    wt<-point
+    min(wt)
+    max(wt)
+    # 查看结果
+    #print(wt)
+
+    # wt <- terra::extract(kde, df_spat_sf)
+    #scale with respect to the minimum
+    wt <- min(wt)/wt
+    max(wt)
+    min(wt)
+    #wt[is.na(wt)] <- 0.1
+    PA$wt <-wt$z
+      
+    rfPK <- randomForest(Rs_Norm ~ P_LastMonth   #+ Measure_Month  
+                        + Pm + Tm + absLog +absLat  #+ Climate_Koeppon 
+                       + LAI  + Elevation, data = PA,weights = PA$wt, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    #predictions <- predict(rfPK, ValidSet1)
+    
+    #rmse <- rmse(ValidSet1$Rs_Norm, predictions)
+
+    #ve <- ve(ValidSet1$Rs_Norm, predictions)
+    # 对测试集进行预测
+    preTK <- predict(rfPK, PA)
+    # 对测试集进行预测
+    preVK <- predict(rfPK, PB)
+    importance_scoresK <- importance(rfPK)
+    # 保存训练集预测结果
+    #write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preTK), "TrainSet_PredictionsKA.csv", row.names = FALSE)
+
+    # 保存验证集预测结果
+   # write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preVK), "ValidSet_PredictionsKB.csv", row.names = FALSE)
+
+   # write.csv(importance_scoresK,"importanceKP.csv")
+    
+     rmse(PA$Rs_Norm, preTK)
+     rmse(PB$Rs_Norm, preVK)
+
+     ve(PA$Rs_Norm, preTK)
+     ve(PB$Rs_Norm, preVK)
+```
+
+```{r}
+
+# 拟合 GLMM
+modelT <- glmer(
+  Rs_Norm ~ Tm + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelT)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelT)
+residuals <- resid(modelT, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelT, 
+       xlab = "Tm (℃)", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("Tm", modelT))
+```
+
+```{r}
+# 拟合 GLMM
+modelT <- glmer(
+  Rs_Norm ~ Elevation + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelT)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelT)
+residuals <- resid(modelT, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelT, 
+       xlab = "Elevation (m)", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("Elevation", modelT))
+```
+
+```{r}
+# 拟合 GLMM
+modelL <- glmer(
+  Rs_Norm ~ LAI + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelL)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelL)
+residuals <- resid(modelL, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelL, 
+       xlab = "LAI", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("LAI", modelL))
+```
+
+```{r}
+# 拟合 GLMM
+modelP <- glmer(
+  Rs_Norm ~ Pm + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelP)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelP)
+residuals <- resid(modelP, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelP, 
+       xlab = "Pm", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("Pm", modelP))
+```
+
+```{r}
+# 拟合 GLMM
+modelPL <- glmer(
+  Rs_Norm ~ P_LastMonth + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelPL)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelPL)
+residuals <- resid(modelPL, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelPL, 
+       xlab = "P_LastMonth", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("P_LastMonth", modelPL))
+```
+
+```{r}
+# 拟合 GLMM
+modelaL <- glmer(
+  Rs_Norm ~ absLat + (1 | studynumber), # 固定效应和随机效应
+  data = P,
+  family = Gamma(link = "log") # Gamma 分布，log 链接函数
+)
+
+# 查看模型结果
+summary(modelaL)
+
+# 提取拟合值和残差
+fitted_vals <- fitted(modelaL)
+residuals <- resid(modelaL, type = "pearson")
+
+# 残差图
+ggplot(data.frame(Fitted = fitted_vals, Residuals = residuals), aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Pearson Residuals")
+
+library(visreg)
+# 使用 visreg 绘图
+visreg(modelaL, 
+       xlab = "absLat", 
+       ylab = "Rs_Norm", 
+       scale = "response", 
+       line = list(col = "red"), 
+       ylim = c(0, 15))
+
+library(effects)
+plot(Effect("absLat", modelaL))
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+```{r}
+globalData<- read_csv("E:/论文/图片/globalData.csv",locale=locale(encoding="GBK"))
+#globalData <- data.frame(globalData)
+#globalData <-filter(globalData,Climate_Koeppon %in% TrainSet$Climate_Koeppon)
+#globalData <-filter(globalData, IGBP %in% TrainSet$IGBP)
+#globalData <- subset(globalData, !is.na(globalData$T_LastMonth))
+#globalData <-globalData[complete.cases(globalData),]
+
+#globalData$Rs_Norm<-0
+globalData %>% 
+  mutate(IGBP1 = case_when(
+    IGBP %in% c("CRO", "CVM") ~ "Cro",
+    IGBP %in% c("BSV", "OSH") ~ "Shr",
+    IGBP %in% c("DBF", "EBF", "ENF","MF") ~ "For",
+    #ClimateTypes %in% c() ~ "Cs",
+    #ClimateTypes %in% c("Cwa", "Cwb", "Cwc") ~ "Cw",
+    IGBP %in% c("GRA", "SAV", "WSA") ~ "Gra",
+    #ClimateTypes %in% c("Dsa", "Dsb", "Dsc", "Dwa", "Dwb", "Dwc", "Dwd") ~ "Dsw",
+    IGBP %in% c("SNO", "URB","WAT") ~ "Oth",
+    TRUE ~ "Oth")) -> globalData
+
+globalData$Climate_Koeppon <- as.factor(globalData$Climate_Koeppon)
+globalData$IGBP <- as.factor(globalData$IGBP)
+globalData$Measure_Month <- as.factor(globalData$Measure_Month)
+globalData$absLat <- abs(globalData$Latitude)
+globalData$absLog <- abs(globalData$Longitude)
+globalData$IGBP1 <- as.factor(globalData$IGBP1)
+globalData$Tm<-globalData$Tm
+globalData$T_LastMonth<-globalData$T_LastMonth
+```
+
+
+```{r}
+global<- read_csv("E:/论文/EI/IGBP_Koppen_MODIS.csv",locale=locale(encoding="GBK"))
+global$absLat <- abs(global$Latitude)
+global$absLog <- abs(global$Longitude)
+
+G1 <- subset(globalData, Measure_Month==1 )
+G2 <- subset(globalData, Measure_Month==2 )
+G3 <- subset(globalData, Measure_Month==3 )
+G4 <- subset(globalData, Measure_Month==4 )
+G5 <- subset(globalData, Measure_Month==5 )
+G6 <- subset(globalData, Measure_Month==6 )
+G7 <- subset(globalData, Measure_Month==7 )
+G8 <- subset(globalData, Measure_Month==8 )
+G9 <- subset(globalData, Measure_Month==9 )
+G10 <- subset(globalData, Measure_Month==10 )
+G11 <- subset(globalData, Measure_Month==11 )
+G12 <- subset(globalData, Measure_Month==12 )
+
+global$Tm<-(G1$Tm+G2$Tm+G3$Tm+G4$Tm+G5$Tm+G6$Tm+G7$Tm+G8$Tm+G9$Tm+G10$Tm+G11$Tm+G12$Tm)/12
+global$Pm<-(G1$Pm+G2$Pm+G3$Pm+G4$Pm+G5$Pm+G6$Pm+G7$Pm+G8$Pm+G9$Pm+G10$Pm+G11$Pm+G12$Pm)/12
+global$LAI<-(G1$LAI+G2$LAI+G3$LAI+G4$LAI+G5$LAI+G6$LAI+G7$LAI+G8$LAI+G9$LAI+G10$LAI+G11$LAI+G12$LAI)/12
+global$Elevation<-G1$Elevation
+
+```
+
+
+
+```{r}
+set.seed(20250110)
+# 训练随机森林模型
+    rf_modelT <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                         + Pm + Tm   #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+# 对测试集进行预测
+    pre1 <- predict(rf_modelT)
+    # 对测试集进行预测
+    pre2 <- predict(rf_modelT, ValidSet1)
+    importance_scoresT <- importance(rf_modelT)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = pre1), "TrainSet_PredictionsT.csv", row.names = FALSE)
+
+   # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = pre2), "ValidSet_PredictionsT.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresT,"importanceT.csv")
+    
+     rmse(TrainSet1$Rs_Norm, pre1)
+     rmse(ValidSet1$Rs_Norm, pre2)
+
+     ve(TrainSet1$Rs_Norm, pre1)
+     ve(ValidSet1$Rs_Norm, pre2)
+
+T_pred <- predict(rf_modelT,globalData)
+# 检查 T_pred 是否包含缺失值
+#sum(is.na(T_pred))
+
+# 如果有缺失值，可以选择去除它们
+#T_pred <- na.omit(T_pred)
+
+# 计算均值（Mean）、标准差（SD）、变异系数（CV） for each observation
+#mean_predictions <- rowMeans(T_pred$individual)  # 每行的平均值
+#sd_predictions <- apply(T_pred$individual, 1, sd)  # 每行的标准差
+#cv_predictions <- (sd_predictions / mean_predictions) * 100  # 变异系数（百分比）
+
+# 输出示例：显示 Mean, SD, CV
+#result_df <- data.frame(
+#  Mean = mean_predictions,
+#  SD = sd_predictions,
+#  CV = cv_predictions
+#)
+T_pred <- cbind(globalData,T_pred)
+#write.csv(T_pred,"GT.csv")
+#T_pred<- subset(T_pred, !is.na(T_pred$Tm))
+
+#mean(T_pred$Predicted_Rs)
+GT1 <- subset(T_pred, Measure_Month==1 )
+GT2 <- subset(T_pred, Measure_Month==2 )
+GT3 <- subset(T_pred, Measure_Month==3 )
+GT4 <- subset(T_pred, Measure_Month==4 )
+GT5 <- subset(T_pred, Measure_Month==5 )
+GT6 <- subset(T_pred, Measure_Month==6 )
+GT7 <- subset(T_pred, Measure_Month==7 )
+GT8 <- subset(T_pred, Measure_Month==8 )
+GT9 <- subset(T_pred, Measure_Month==9 )
+GT10 <- subset(T_pred, Measure_Month==10 )
+GT11 <- subset(T_pred, Measure_Month==11 )
+GT12 <- subset(T_pred, Measure_Month==12 )
+
+
+GT1$Predicted_Rs <-(GT1$T_pred+GT2$T_pred+GT3$T_pred+GT4$T_pred+
+                     GT5$T_pred+GT6$T_pred+GT7$T_pred+
+                     GT8$T_pred+GT9$T_pred+GT10$T_pred+
+                     GT11$T_pred+GT12$T_pred)/12
+
+write.csv(GT1,"GTP.csv")
+
+
+GT1_no_na <- GT1[!is.na(GT1$Predicted_Rs), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(9,'GnBu')))(32)
+Map_point_kde_nomasT <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GT1_no_na,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.1))+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasT
+
+GTR<-Map_point_kde_nomasT+ annotate("text", x = -150 , y = -10,label= ("TNW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean Rs"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("2.19"," ",g," ","C"," ", m^-2," ", "day"^-1)),size = 3)
+
+GTR
+
+ggsave("TNW.png", GTR, width = 8, height = 10, units = "in")
+```
+
+
+```{r}
+set.seed(20250110)
+# 训练随机森林模型
+    rf_modelF <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                         + Pm + Tm  +absLat + absLog # + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1, mtry=3, importance=TRUE, ntree=500)
+# 对测试集进行预测
+    preT <- predict(rf_modelF)
+    # 对测试集进行预测
+    preV <- predict(rf_modelF, ValidSet1)
+    importance_scoresF <- importance(rf_modelF)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preT), "TrainSet_Predictions.csv", row.names = FALSE)
+
+   # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preV), "ValidSet_Predictions.csv", row.names = FALSE)
+
+#    write.csv(importance_scores,"importance.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preT)
+     rmse(ValidSet1$Rs_Norm, preV)
+
+     ve(TrainSet1$Rs_Norm, preT)
+     ve(ValidSet1$Rs_Norm, preV)
+
+F_pred <- predict(rf_modelF,globalData)
+F_pred <- cbind(globalData,F_pred)
+#write.csv(F_pred,"GF.csv")
+#T_pred<- subset(T_pred, !is.na(T_pred$Tm))
+
+#mean(T_pred$Predicted_Rs)
+
+
+GF1 <- subset(F_pred, Measure_Month==1 )
+GF2 <- subset(F_pred, Measure_Month==2 )
+GF3 <- subset(F_pred, Measure_Month==3 )
+GF4 <- subset(F_pred, Measure_Month==4 )
+GF5 <- subset(F_pred, Measure_Month==5 )
+GF6 <- subset(F_pred, Measure_Month==6 )
+GF7 <- subset(F_pred, Measure_Month==7 )
+GF8 <- subset(F_pred, Measure_Month==8 )
+GF9 <- subset(F_pred, Measure_Month==9 )
+GF10 <- subset(F_pred, Measure_Month==10 )
+GF11 <- subset(F_pred, Measure_Month==11 )
+GF12 <- subset(F_pred, Measure_Month==12 )
+
+
+GF1$Predicted_Rs <-(GF1$F_pred+GF2$F_pred+GF3$F_pred+GF4$F_pred+
+                     GF5$F_pred+GF6$F_pred+GF7$F_pred+
+                     GF8$F_pred+GF9$F_pred+GF10$F_pred+
+                     GF11$F_pred+GF12$F_pred)/12
+#mean(GF1$Predicted_Rs)
+write.csv(GF1,"GFP.csv")
+
+GF1_no_na <- GF1[!is.na(GF1$Predicted_Rs), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'GnBu')))(32)
+Map_point_kde_nomasF <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GF1_no_na,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.1))+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasF
+
+GFR<-Map_point_kde_nomasF+ annotate("text", x = -150 , y = -10,label= ("SCC model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean Rs"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("2.39"," ",g," ","C"," ", m^-2," ", "day"^-1)),size = 3)
+
+GFR
+ggsave("SCC.png", GFR, width = 8, height = 10, units = "in")
+
+```
+
+
+```{r}
+set.seed(20250110)
+   rfPK <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                        + Pm + Tm  #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1,weights = TrainSet1$wt, mtry=3, importance=TRUE, ntree=500)
+    
+    # 对测试集进行预测
+    #predictions <- predict(rfPK, ValidSet1)
+    
+    #rmse <- rmse(ValidSet1$Rs_Norm, predictions)
+
+    #ve <- ve(ValidSet1$Rs_Norm, predictions)
+    # 对测试集进行预测
+    preTK <- predict(rfPK)
+    # 对测试集进行预测
+    preVK <- predict(rfPK, ValidSet1)
+    importance_scoresK <- importance(rfPK)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preTK), "TrainSet_PredictionsK.csv", row.names = FALSE)
+
+    # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preVK), "ValidSet_PredictionsK.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresK,"importanceK.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preTK)
+     rmse(ValidSet1$Rs_Norm, preVK)
+
+     ve(TrainSet1$Rs_Norm, preTK)
+     ve(ValidSet1$Rs_Norm, preVK)
+
+K_pred <- predict(rfPK,globalData)
+K_pred <- cbind(globalData,K_pred)
+#write.csv(K_pred,"GK.csv")
+#T_pred<- subset(T_pred, !is.na(T_pred$Tm))
+
+#mean(T_pred$Predicted_Rs)
+
+
+GK1 <- subset(K_pred, Measure_Month==1 )
+GK2 <- subset(K_pred, Measure_Month==2 )
+GK3 <- subset(K_pred, Measure_Month==3 )
+GK4 <- subset(K_pred, Measure_Month==4 )
+GK5 <- subset(K_pred, Measure_Month==5 )
+GK6 <- subset(K_pred, Measure_Month==6 )
+GK7 <- subset(K_pred, Measure_Month==7 )
+GK8 <- subset(K_pred, Measure_Month==8 )
+GK9 <- subset(K_pred, Measure_Month==9 )
+GK10 <- subset(K_pred, Measure_Month==10 )
+GK11 <- subset(K_pred, Measure_Month==11 )
+GK12 <- subset(K_pred, Measure_Month==12 )
+
+
+GK1$Predicted_Rs <-(GK1$K_pred+GK2$K_pred+GK3$K_pred+GK4$K_pred+
+                     GK5$K_pred+GK6$K_pred+GK7$K_pred+
+                     GK8$K_pred+GK9$K_pred+GK10$K_pred+
+                     GK11$K_pred+GK12$K_pred)/12
+mean(GK1$Predicted_Rs)
+write.csv(GK1,"GKP.csv")
+
+GK1_no_na <- GK1[!is.na(GK1$Predicted_Rs), ]
+
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'GnBu')))(32)
+Map_point_kde_nomasK <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GK1_no_na,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.1))+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasK
+
+GKR<-Map_point_kde_nomasK+ annotate("text", x = -150 , y = -10,label= ("KDW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean Rs"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("1.62"," ",g," ","C"," ", m^-2," ", "day"^-1)),size = 3)
+
+GKR
+ggsave("KDW.png", GKR, width = 8, height = 10, units = "in")
+```
+
+```{r}
+set.seed(20250110)
+ rfPC <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                        + Pm + Tm #+ absLog + absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = TrainSet1,weights = TrainSet1$wtP, mtry=3, importance=TRUE, ntree=500)
+     # 对测试集进行预测
+    #prePC <- predict(rfP, ValidSet1)
+    
+    #rmse <- rmse(ValidSet1$Rs_Norm, predictions)
+
+    #ve <- ve(ValidSet1$Rs_Norm, predictions)
+    # 对测试集进行预测
+    preTC <- predict(rfPC)
+    # 对测试集进行预测
+    preVC <- predict(rfPC, ValidSet1)
+    importance_scoresC <- importance(rfPC)
+    # 保存训练集预测结果
+#    write.csv(data.frame(Original = TrainSet1$Rs_Norm, Predicted = preTC), "TrainSet_PredictionsC.csv", row.names = FALSE)
+
+    # 保存验证集预测结果
+#    write.csv(data.frame(Original = ValidSet1$Rs_Norm, Predicted = preVC), "ValidSet_PredictionsC.csv", row.names = FALSE)
+
+#    write.csv(importance_scoresC,"importanceC.csv")
+    
+     rmse(TrainSet1$Rs_Norm, preTC)
+     rmse(ValidSet1$Rs_Norm, preVC)
+
+     ve(TrainSet1$Rs_Norm, preTC)
+     ve(ValidSet1$Rs_Norm, preVC)
+     
+C_pred <- predict(rfPC,globalData)
+C_pred <- cbind(globalData,C_pred)
+write.csv(C_pred,"GC.csv")
+#T_pred<- subset(T_pred, !is.na(T_pred$Tm))
+
+#mean(T_pred$Predicted_Rs)
+
+
+GC1 <- subset(C_pred, Measure_Month==1 )
+GC2 <- subset(C_pred, Measure_Month==2 )
+GC3 <- subset(C_pred, Measure_Month==3 )
+GC4 <- subset(C_pred, Measure_Month==4 )
+GC5 <- subset(C_pred, Measure_Month==5 )
+GC6 <- subset(C_pred, Measure_Month==6 )
+GC7 <- subset(C_pred, Measure_Month==7 )
+GC8 <- subset(C_pred, Measure_Month==8 )
+GC9 <- subset(C_pred, Measure_Month==9 )
+GC10 <- subset(C_pred, Measure_Month==10 )
+GC11 <- subset(C_pred, Measure_Month==11 )
+GC12 <- subset(C_pred, Measure_Month==12 )
+
+
+GC1$Predicted_Rs <-(GC1$C_pred+GC2$C_pred+GC3$C_pred+GC4$C_pred+
+                     GC5$C_pred+GC6$C_pred+GC7$C_pred+
+                     GC8$C_pred+GC9$C_pred+GC10$C_pred+
+                     GC11$C_pred+GC12$C_pred)/12
+mean(GC1$Predicted_Rs)
+write.csv(GC1,"GCP.csv")
+
+GC1_no_na <- GC1[!is.na(GC1$Predicted_Rs), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'GnBu')))(32)
+Map_point_kde_nomasC <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GC1_no_na,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.1))+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasC
+
+GCR<-Map_point_kde_nomasC+ annotate("text", x = -150 , y = -10,label= ("SCW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean Rs"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("1.69"," ",g," ","C"," ", m^-2," ", "day"^-1)),size = 3)
+
+GCR
+ggsave("SCW.png", GCR, width = 8, height = 10, units = "in")
+```
+```{r}
+library(rnaturalearth)
+library(sf)
+library(raster)
+library(geodata)
+# 获取世界地图数据
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# 将世界地图的几何数据转换为栅格数据
+# 选择一个适合的分辨率
+r <- raster(extent(world), resolution = 1)  # 设置栅格的分辨率为1度
+
+# 使用 rasterize 将世界地图的边界转化为栅格数据
+# 创建二进制栅格，设置边界为1，背景为0
+r_world <- rasterize(world, r, field = NA, background = 0)
+
+# 导出为 TIFF 格式
+writeRaster(r_world, "world_map.tif", format = "GTiff", overwrite = TRUE)
+
+w <-world(resolution=5, level=0, path=tempdir(), version="latest")
+```
+
+```{r}
+# 获取世界地图数据
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# 提取世界地图的几何数据（即边界的坐标）
+world_geometry <- st_geometry(world)
+
+# 提取国家的名称作为属性
+world_data <- data.frame(country = world$name, geometry = world_geometry)
+
+# 提取每个国家的边界坐标
+# 使用 st_coordinates() 提取坐标
+coords <- st_coordinates(world_geometry)
+
+# 将坐标与国家名称结合
+coords_df <- data.frame(
+  country = rep(world_data$country, sapply(world_geometry, function(x) length(st_coordinates(x)[, 1]))),
+  coords
+)
+# 将坐标数据导出为 CSV 文件
+write.csv(coords_df, "country_coordinates.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+# 加载必要的库
+library(randomForest)
+
+# 使用mtcars数据集
+#data(mtcars)
+X <- P[,]  # 使用所有特征（除去mpg作为目标变量）
+y <- P$Rs_Norm   # 目标变量
+
+# 创建一个空向量来存储每次实验的均方误差（MSE）和变异系数
+mse_scores <- numeric(100)
+rmse_scores <- numeric(100)
+r2_scores <- numeric(100)
+
+# 创建一个空向量来存储每次实验的预测值
+predictions_listT <- matrix(NA, nrow = 100, ncol = nrow(globalData))
+
+# 设置随机种子
+set.seed(123)
+
+# 进行100次自举
+for (i in 1:100) {
+  # 自举抽样
+  boot_sample <- sample(1:nrow(X), nrow(X), replace = TRUE)
+  X_resampled <- X[boot_sample, ]
+  y_resampled <- y[boot_sample]
+  
+  # 将数据分割为训练集和测试集（70%训练，30%测试）
+  train_index <- sample(1:nrow(X_resampled), 0.7 * nrow(X_resampled))
+  X_train <- X_resampled[train_index, ]
+  y_train <- y_resampled[train_index]
+  X_test <- X_resampled[-train_index, ]
+  y_test <- y_resampled[-train_index]
+  
+  # 将训练数据与目标变量组合成数据框
+  train_data <- data.frame(y = y_train, X_train)
+  test_data <- data.frame(y = y_test, X_test)
+  
+  # 训练随机森林回归模型（使用公式形式）
+  rf_modelTT <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                         + Pm + Tm   #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)  # 使用 '.' 代表所有特征
+  
+  # 预测并计算均方误差（MSE）
+  y_pred <- predict(rf_modelTT, newdata = test_data)
+  mse_scores[i] <- mean((y_pred - y_test)^2)  # 计算均方误差
+  rmse_scores[i] <- sqrt(mean((y_pred - y_test)^2))
+
+  # 计算 R²（决定系数）
+  ss_res <- sum((y_pred - y_test)^2)  # 残差平方和
+  ss_tot <- sum((y_test - mean(y_test))^2)  # 总平方和
+  r2_scores[i] <- 1 - (ss_res / ss_tot)  # 计算 R²
+  # 对 global_data 进行预测
+  predictions_listT[i, ] <- predict(rf_modelTT, newdata = globalData)
+}
+
+# 计算均方误差的均值和标准差
+cat("mse的平均值：\n")
+print(mean(mse_scores))
+print(sd(mse_scores))
+
+cat("rmse的平均值：\n")
+print(mean(rmse_scores))
+print(sd(rmse_scores))
+
+cat("r2的平均值：\n")
+print(mean(r2_scores))
+print(sd(r2_scores))
+
+# 计算100次预测结果的平均值和标准差
+mean_predictionsT <- apply(predictions_listT, 2, mean)
+std_predictionsT <- apply(predictions_listT, 2, sd)
+
+# 计算变异系数（标准差 / 均值）
+cv_predictionsT <- std_predictionsT / mean_predictionsT
+
+# 将预测的平均值和变异系数添加到 global_data 中
+Average_PredictionsT <- mean_predictionsT
+CV_PredictionsT <- cv_predictionsT
+
+globalDataT <- cbind(globalData,Average_PredictionsT)
+globalDataT <- cbind(globalDataT,CV_PredictionsT)
+write.csv(globalDataT,"globalDataT.csv")
+# 输出100次预测结果的平均值和变异系数
+#cat("预测结果的平均值：\n")
+#print(mean_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+GTT1 <- subset(globalDataT, Measure_Month==1 )
+GTT2 <- subset(globalDataT, Measure_Month==2 )
+GTT3 <- subset(globalDataT, Measure_Month==3 )
+GTT4 <- subset(globalDataT, Measure_Month==4 )
+GTT5 <- subset(globalDataT, Measure_Month==5 )
+GTT6 <- subset(globalDataT, Measure_Month==6 )
+GTT7 <- subset(globalDataT, Measure_Month==7 )
+GTT8 <- subset(globalDataT, Measure_Month==8 )
+GTT9 <- subset(globalDataT, Measure_Month==9 )
+GTT10 <- subset(globalDataT, Measure_Month==10 )
+GTT11 <- subset(globalDataT, Measure_Month==11 )
+GTT12 <- subset(globalDataT, Measure_Month==12 )
+
+
+GTT1$Predicted_Rs <-(GTT1$Average_PredictionsT+GTT2$Average_PredictionsT+GTT3$Average_PredictionsT+GTT4$Average_PredictionsT+
+                     GTT5$Average_PredictionsT+GTT6$Average_PredictionsT+GTT7$Average_PredictionsT+
+                     GTT8$Average_PredictionsT+GTT9$Average_PredictionsT+GTT10$Average_PredictionsT+
+                     GTT11$Average_PredictionsT+GTT12$Average_PredictionsT)/12
+mean(GTT1$Predicted_Rs)
+write.csv(GTT1,"GTTP.csv")
+
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+Map_point_kde_nomasT <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GTT1,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap)+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasT
+
+```
+
+
+```{r}
+# 加载必要的库
+library(randomForest)
+
+# 使用mtcars数据集
+#data(mtcars)
+X <- P[,]  # 使用所有特征（除去mpg作为目标变量）
+y <- P$Rs_Norm   # 目标变量
+
+# 创建一个空向量来存储每次实验的均方误差（MSE）和变异系数
+mse_scores <- numeric(100)
+rmse_scores <- numeric(100)
+r2_scores <- numeric(100)
+
+# 创建一个空向量来存储每次实验的预测值
+predictions_listF <- matrix(NA, nrow = 100, ncol = nrow(globalData))
+
+# 设置随机种子
+set.seed(123)
+
+# 进行100次自举
+for (i in 1:100) {
+  # 自举抽样
+  boot_sample <- sample(1:nrow(X), nrow(X), replace = TRUE)
+  X_resampled <- X[boot_sample, ]
+  y_resampled <- y[boot_sample]
+  
+  # 将数据分割为训练集和测试集（70%训练，30%测试）
+  train_index <- sample(1:nrow(X_resampled), 0.7 * nrow(X_resampled))
+  X_train <- X_resampled[train_index, ]
+  y_train <- y_resampled[train_index]
+  X_test <- X_resampled[-train_index, ]
+  y_test <- y_resampled[-train_index]
+  
+  # 将训练数据与目标变量组合成数据框
+  train_data <- data.frame(y = y_train, X_train)
+  test_data <- data.frame(y = y_test, X_test)
+  
+  # 训练随机森林回归模型（使用公式形式）
+  rf_modelFF <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month +   
+                         + Pm + Tm   + absLog +absLat # + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)  # 使用 '.' 代表所有特征
+  
+  # 预测并计算均方误差（MSE）
+  y_pred <- predict(rf_modelFF, newdata = test_data)
+  mse_scores[i] <- mean((y_pred - y_test)^2)  # 计算均方误差
+  rmse_scores[i] <- sqrt(mean((y_pred - y_test)^2))
+
+  # 计算 R²（决定系数）
+  ss_res <- sum((y_pred - y_test)^2)  # 残差平方和
+  ss_tot <- sum((y_test - mean(y_test))^2)  # 总平方和
+  r2_scores[i] <- 1 - (ss_res / ss_tot)  # 计算 R²
+  # 对 global_data 进行预测
+  predictions_listF[i, ] <- predict(rf_modelFF, newdata = globalData)
+  print(i)
+}
+
+# 计算均方误差的均值和标准差
+cat("mse的平均值：\n")
+print(mean(mse_scores))
+print(sd(mse_scores))
+
+cat("rmse的平均值：\n")
+print(mean(rmse_scores))
+print(sd(rmse_scores))
+
+cat("r2的平均值：\n")
+print(mean(r2_scores))
+print(sd(r2_scores))
+
+# 计算100次预测结果的平均值和标准差
+mean_predictionsF <- apply(predictions_listF, 2, mean)
+std_predictionsF <- apply(predictions_listF, 2, sd)
+
+# 计算变异系数（标准差 / 均值）
+cv_predictionsF <- std_predictionsF / mean_predictionsF
+
+# 将预测的平均值和变异系数添加到 global_data 中
+Average_PredictionsF <- mean_predictionsF
+CV_PredictionsF <- cv_predictionsF
+
+globalDataF <- cbind(globalData,Average_PredictionsF)
+globalDataF <- cbind(globalDataF,CV_PredictionsF)
+write.csv(globalDataF,"globalDataF.csv")
+# 输出100次预测结果的平均值和变异系数
+#cat("预测结果的平均值：\n")
+#print(mean_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+GFF1 <- subset(globalDataF, Measure_Month==1 )
+GFF2 <- subset(globalDataF, Measure_Month==2 )
+GFF3 <- subset(globalDataF, Measure_Month==3 )
+GFF4 <- subset(globalDataF, Measure_Month==4 )
+GFF5 <- subset(globalDataF, Measure_Month==5 )
+GFF6 <- subset(globalDataF, Measure_Month==6 )
+GFF7 <- subset(globalDataF, Measure_Month==7 )
+GFF8 <- subset(globalDataF, Measure_Month==8 )
+GFF9 <- subset(globalDataF, Measure_Month==9 )
+GFF10 <- subset(globalDataF, Measure_Month==10 )
+GFF11 <- subset(globalDataF, Measure_Month==11 )
+GFF12 <- subset(globalDataF, Measure_Month==12 )
+
+
+GFF1$Predicted_Rs <-(GFF1$Average_PredictionsF+GFF2$Average_PredictionsF+GFF3$Average_PredictionsF+GFF4$Average_PredictionsF+
+                     GFF5$Average_PredictionsF+GFF6$Average_PredictionsF+GFF7$Average_PredictionsF+
+                     GFF8$Average_PredictionsF+GFF9$Average_PredictionsF+GFF10$Average_PredictionsF+
+                     GFF11$Average_PredictionsF+GFF12$Average_PredictionsF)/12
+mean(GFF1$Predicted_Rs)
+write.csv(GFF1,"GFFP.csv")
+
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+Map_point_kde_nomasF <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GFF1,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap)+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasF
+
+
+```
+
+
+```{r}
+# 加载必要的库
+library(randomForest)
+
+# 使用mtcars数据集
+#data(mtcars)
+X <- P[,]  # 使用所有特征（除去mpg作为目标变量）
+y <- P$Rs_Norm   # 目标变量
+
+# 创建一个空向量来存储每次实验的均方误差（MSE）和变异系数
+mse_scores <- numeric(100)
+rmse_scores <- numeric(100)
+r2_scores <- numeric(100)
+
+# 创建一个空向量来存储每次实验的预测值
+predictions_listK <- matrix(NA, nrow = 100, ncol = nrow(globalData))
+
+# 设置随机种子
+set.seed(123)
+
+# 进行100次自举
+for (i in 1:100) {
+  # 自举抽样
+  boot_sample <- sample(1:nrow(X), nrow(X), replace = TRUE)
+  X_resampled <- X[boot_sample, ]
+  y_resampled <- y[boot_sample]
+  
+  # 将数据分割为训练集和测试集（70%训练，30%测试）
+  train_index <- sample(1:nrow(X_resampled), 0.7 * nrow(X_resampled))
+  X_train <- X_resampled[train_index, ]
+  y_train <- y_resampled[train_index]
+  X_test <- X_resampled[-train_index, ]
+  y_test <- y_resampled[-train_index]
+  
+  # 将训练数据与目标变量组合成数据框
+  train_data <- data.frame(y = y_train, X_train)
+  test_data <- data.frame(y = y_test, X_test)
+  
+  # 训练随机森林回归模型（使用公式形式）
+  rf_modelKK <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                         + Pm + Tm   #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)  # 使用 '.' 代表所有特征
+  
+  # 对测试集进行预测
+    predictions <- predict(rf_modelKK)
+    
+    #calculate out-of-bag residuals
+    train_data$res <- train_data$Rs_Norm - predictions
+    #convert to sp class
+    #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+    #crs(df_spat) <- crs(awt)
+      
+    df_spat_sf <- st_as_sf(train_data, coords = c("X", "Y"))
+    
+    kde <- sf.kde(x = df_spat_sf, res =0.1 ,scale.factor = 10000)
+    #kde5 <- sf.kde(x = df_spat_sf, res =0.5 ,scale.factor = 10000)
+    # Extract raster values
+    #kde_values <- raster::values(kde5)
+   # write.csv(kde_values,"kde_values.csv")
+   # # Extract coordinates of each raster cell (grid)
+   # kde_coords <- raster::xyFromCell(kde5, 1:ncell(kde5))
+
+    # Combine coordinates and values into a data frame
+    #kde_df <- data.frame(x = kde_coords[,1], y = kde_coords[,2], density = kde_values)
+
+    #kde_values <- raster::values(kde)
+    #write.csv(kde_df,"kde_df.csv")
+      
+    points_sf <- train_data[c(41,42)]  # 使用你的输入样本点
+
+    # 提取点对应的 KDE 值
+    point <- terra::extract(kde, points_sf)
+
+    point1 <- na.omit(point)
+    #point[is.na(point)] <- 0.5
+    point[is.na(point)] <- min(point1$z)
+    wt<-point
+    min(wt)
+    max(wt)
+    # 查看结果
+    #print(wt)
+
+    # wt <- terra::extract(kde, df_spat_sf)
+    #scale with respect to the minimum
+    wt <- min(wt)/wt
+    max(wt)
+    min(wt)
+    #wt[is.na(wt)] <- 0.1
+    train_data$wt <-wt$z
+      
+    rfPKK <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month   
+                        + Pm + Tm  #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data,weights = train_data$wt, mtry=3, importance=TRUE, ntree=500)
+  
+  
+  # 预测并计算均方误差（MSE）
+  y_pred <- predict(rfPKK, newdata = test_data)
+  mse_scores[i] <- mean((y_pred - y_test)^2)  # 计算均方误差
+  rmse_scores[i] <- sqrt(mean((y_pred - y_test)^2))
+
+  # 计算 R²（决定系数）
+  ss_res <- sum((y_pred - y_test)^2)  # 残差平方和
+  ss_tot <- sum((y_test - mean(y_test))^2)  # 总平方和
+  r2_scores[i] <- 1 - (ss_res / ss_tot)  # 计算 R²
+  # 对 global_data 进行预测
+  predictions_listK[i, ] <- predict(rfPKK, newdata = globalData)
+  print(i)
+}
+
+# 计算均方误差的均值和标准差
+cat("mse的平均值：\n")
+print(mean(mse_scores))
+print(sd(mse_scores))
+
+cat("rmse的平均值：\n")
+print(mean(rmse_scores))
+print(sd(rmse_scores))
+
+cat("r2的平均值：\n")
+print(mean(r2_scores))
+print(sd(r2_scores))
+
+# 计算100次预测结果的平均值和标准差
+mean_predictionsK <- apply(predictions_listK, 2, mean)
+std_predictionsK <- apply(predictions_listK, 2, sd)
+
+# 计算变异系数（标准差 / 均值）
+cv_predictionsK <- std_predictionsK / mean_predictionsK
+
+# 将预测的平均值和变异系数添加到 global_data 中
+Average_PredictionsK <- mean_predictionsK
+CV_PredictionsK <- cv_predictionsK
+
+globalDataK <- cbind(globalData,Average_PredictionsK)
+globalDataK <- cbind(globalDataK,CV_PredictionsK)
+write.csv(globalDataK,"globalDataK.csv")
+# 输出100次预测结果的平均值和变异系数
+#cat("预测结果的平均值：\n")
+#print(mean_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+GKK1 <- subset(globalDataK, Measure_Month==1 )
+GKK2 <- subset(globalDataK, Measure_Month==2 )
+GKK3 <- subset(globalDataK, Measure_Month==3 )
+GKK4 <- subset(globalDataK, Measure_Month==4 )
+GKK5 <- subset(globalDataK, Measure_Month==5 )
+GKK6 <- subset(globalDataK, Measure_Month==6 )
+GKK7 <- subset(globalDataK, Measure_Month==7 )
+GKK8 <- subset(globalDataK, Measure_Month==8 )
+GKK9 <- subset(globalDataK, Measure_Month==9 )
+GKK10 <- subset(globalDataK, Measure_Month==10 )
+GKK11 <- subset(globalDataK, Measure_Month==11 )
+GKK12 <- subset(globalDataK, Measure_Month==12 )
+
+
+GKK1$Predicted_Rs <-(GKK1$Average_PredictionsK+GKK2$Average_PredictionsK+GKK3$Average_PredictionsK+GKK4$Average_PredictionsK+
+                     GKK5$Average_PredictionsK+GKK6$Average_PredictionsK+GKK7$Average_PredictionsK+
+                     GKK8$Average_PredictionsK+GKK9$Average_PredictionsK+GKK10$Average_PredictionsK+
+                     GKK11$Average_PredictionsK+GKK12$Average_PredictionsK)/12
+mean(GKK1$Predicted_Rs)
+write.csv(GKK1,"GKKP.csv")
+
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+Map_point_kde_nomasK <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GKK1,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap)+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasK
+```
+
+
+```{r}
+
+# 加载必要的库
+library(randomForest)
+
+# 使用mtcars数据集
+#data(mtcars)
+X <- P[,]  # 使用所有特征（除去mpg作为目标变量）
+y <- P$Rs_Norm   # 目标变量
+
+# 创建一个空向量来存储每次实验的均方误差（MSE）和变异系数
+mse_scores <- numeric(100)
+rmse_scores <- numeric(100)
+r2_scores <- numeric(100)
+
+# 创建一个空向量来存储每次实验的预测值
+predictions_listC <- matrix(NA, nrow = 100, ncol = nrow(globalData))
+
+# 设置随机种子
+set.seed(123)
+
+# 进行100次自举
+for (i in 1:100) {
+  # 自举抽样
+  boot_sample <- sample(1:nrow(X), nrow(X), replace = TRUE)
+  X_resampled <- X[boot_sample, ]
+  y_resampled <- y[boot_sample]
+  
+  # 将数据分割为训练集和测试集（70%训练，30%测试）
+  train_index <- sample(1:nrow(X_resampled), 0.7 * nrow(X_resampled))
+  X_train <- X_resampled[train_index, ]
+  y_train <- y_resampled[train_index]
+  X_test <- X_resampled[-train_index, ]
+  y_test <- y_resampled[-train_index]
+  
+  # 将训练数据与目标变量组合成数据框
+  train_data <- data.frame(y = y_train, X_train)
+  test_data <- data.frame(y = y_test, X_test)
+  
+  # 训练随机森林回归模型（使用公式形式）
+  rf_modelCC <- randomForest(Rs_Norm ~ P_LastMonth   + Measure_Month 
+                         + Pm + Tm   #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data, mtry=3, importance=TRUE, ntree=500)  # 使用 '.' 代表所有特征
+  
+  # 对测试集进行预测
+    predictions <- predict(rf_modelCC)
+    
+     #calculate out-of-bag residuals
+      train_data$res <- train_data$Rs_Norm - predictions
+      #convert to sp class
+      #df_spat <- train_data; coordinates(df_spat) = ~X+Y
+      #crs(df_spat) <- crs(awt)
+      
+      res <- data.frame(
+                        x = train_data$X,
+                        y = train_data$Y,
+                        res = train_data$Rs_Norm - predictions
+                        )
+
+       #calculate out-of-bag residuals
+#      df$res <- df$Rs_Norm - predict(rf, df)
+      #convert to sp class
+#      df_spat <- df; coordinates(df_spat) = ~X+Y
+      
+      v <- variogram(object = res~1, locations = ~x+y, data = res, cutoff = 360)
+
+      #try fitting an exponential model
+      fit <- fit.variogram(v, model = vgm("Exp"))
+      # plot(v, fit)
+      
+     # Automatically fit the best variogram model (Gau, Exp, Sph)
+     #models <- c("Sph", "Gau", "Exp")
+  #   best_fit <- NULL
+   #  best_sse <- Inf
+
+  #   for (m in models) {
+  #      fit <- tryCatch(
+  #             {
+   #              fit.variogram(v, model = vgm(m))  # 添加初始值
+   #            },
+   #              error = function(e) NULL
+   #     )
+  
+     # 绘制拟合结果以便检查
+  #     if (!is.null(fit)) {
+  #            plot(v, fit, main = paste("Fitting", model))
+  #     }
+  
+     # 检查拟合结果是否有效
+  #     if (!is.null(fit) && !is.na(attr(fit, "SSErr"))) {
+  #     sse <- attr(fit, "SSErr")
+  #     if (sse < best_sse) {
+ #           best_fit <- fit
+ #            best_sse <- sse
+  #           }
+  #      }
+  #   }
+      #calculate distance matrix between sample points
+      d = dist(train_data[ ,c("X", "Y")])
+ #     wtP <- covWt(dmat = d, model = best_fit)
+      wtP <- covWt(dmat = d, model = fit)
+      train_data$wtP <- wtP
+      #write.csv(TrainSet1,"TrainSet.csv")
+    rfPCC <- randomForest(Rs_Norm ~ P_LastMonth + Measure_Month   
+                        + Pm + Tm #+ absLog +absLat + Climate_Koeppon
+                       + LAI  + Elevation, data = train_data,weights = train_data$wtP, mtry=3, importance=TRUE, ntree=500)
+  
+  
+  # 预测并计算均方误差（MSE）
+  y_pred <- predict(rfPCC, newdata = test_data)
+  mse_scores[i] <- mean((y_pred - y_test)^2)  # 计算均方误差
+  rmse_scores[i] <- sqrt(mean((y_pred - y_test)^2))
+
+  # 计算 R²（决定系数）
+  ss_res <- sum((y_pred - y_test)^2)  # 残差平方和
+  ss_tot <- sum((y_test - mean(y_test))^2)  # 总平方和
+  r2_scores[i] <- 1 - (ss_res / ss_tot)  # 计算 R²
+  # 对 global_data 进行预测
+  predictions_listC[i, ] <- predict(rfPCC, newdata = globalData)
+  print(i)
+}
+
+# 计算均方误差的均值和标准差
+cat("mse的平均值：\n")
+print(mean(mse_scores))
+print(sd(mse_scores))
+
+cat("rmse的平均值：\n")
+print(mean(rmse_scores))
+print(sd(rmse_scores))
+
+cat("r2的平均值：\n")
+print(mean(r2_scores))
+print(sd(r2_scores))
+
+# 计算100次预测结果的平均值和标准差
+mean_predictionsC <- apply(predictions_listC, 2, mean)
+std_predictionsC <- apply(predictions_listC, 2, sd)
+
+# 计算变异系数（标准差 / 均值）
+cv_predictionsC <- std_predictionsC / mean_predictionsC
+
+# 将预测的平均值和变异系数添加到 global_data 中
+Average_PredictionsC <- mean_predictionsC
+CV_PredictionsC <- cv_predictionsC
+
+globalDataC <- cbind(globalData,Average_PredictionsC)
+globalDataC <- cbind(globalDataC,CV_PredictionsC)
+write.csv(globalDataC,"globalDataC.csv")
+
+
+GCC1 <- subset(globalDataC, Measure_Month==1 )
+GCC2 <- subset(globalDataC, Measure_Month==2 )
+GCC3 <- subset(globalDataC, Measure_Month==3 )
+GCC4 <- subset(globalDataC, Measure_Month==4 )
+GCC5 <- subset(globalDataC, Measure_Month==5 )
+GCC6 <- subset(globalDataC, Measure_Month==6 )
+GCC7 <- subset(globalDataC, Measure_Month==7 )
+GCC8 <- subset(globalDataC, Measure_Month==8 )
+GCC9 <- subset(globalDataC, Measure_Month==9 )
+GCC10 <- subset(globalDataC, Measure_Month==10 )
+GCC11 <- subset(globalDataC, Measure_Month==11 )
+GCC12 <- subset(globalDataC, Measure_Month==12 )
+
+
+GCC1$Predicted_Rs <-(GCC1$Average_PredictionsC+GCC2$Average_PredictionsC+GCC3$Average_PredictionsC+GCC4$Average_PredictionsC+
+                     GCC5$Average_PredictionsC+GCC6$Average_PredictionsC+GCC7$Average_PredictionsC+
+                     GCC8$Average_PredictionsC+GCC9$Average_PredictionsC+GCC10$Average_PredictionsC+
+                     GCC11$Average_PredictionsC+GCC12$Average_PredictionsC)/12
+mean(GCC1$Predicted_Rs)
+write.csv(GCC1,"GCCP.csv")
+
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+Map_point_kde_nomasC <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = GCC1,aes(Longitude, Latitude, fill = Predicted_Rs))+
+  scale_fill_gradientn(colours = my_colormap)+
+  labs(colour = "Predicted Rs") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+Map_point_kde_nomasC
+# 输出100次预测结果的平均值和变异系数
+#cat("预测结果的平均值：\n")
+#print(mean_predictionsT)
+
+#cat("预测结果的变异系数：\n")
+#print(cv_predictionsT)
+```
+
+
+```{r}
+CVT<- read_csv("E:/论文/EI/GTTP.csv",locale=locale(encoding="GBK"))
+CVT <- CVT[!is.na(CVT$CV), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+VT <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = CVT,aes(Longitude, Latitude, fill = CV))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.01))+
+  labs(colour = "CV") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+VT
+
+VTT<-VT+ annotate("text", x = -150 , y = -10,label= ("TNW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean CV"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("12.36%")),size = 3)
+
+VTT
+ggsave("TNWCV.png",VTT, width = 8, height = 10, units = "in")
+```
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+```{r}
+CVF<- read_csv("E:/论文/EI/GFFP.csv",locale=locale(encoding="GBK"))
+CVF <- CVF[!is.na(CVF$CV), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+VF <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = CVF,aes(Longitude, Latitude, fill = CV))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.01))+
+  labs(colour = "CV") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+VF
+
+VFF<-VF+ annotate("text", x = -150 , y = -10,label= ("SCC model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean CV"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("9.07%")),size = 3)
+
+VFF
+ggsave("SCCCV.png", VFF, width = 8, height = 10, units = "in")
+```
+```{r}
+CVK<- read_csv("E:/论文/EI/GKKP.csv",locale=locale(encoding="GBK"))
+CVK <- CVK[!is.na(CVK$CV), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+VK <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = CVK,aes(Longitude, Latitude, fill = CV))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.01))+
+  labs(colour = "CV") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+VK
+
+VKK<-VK+ annotate("text", x = -150 , y = -10,label= ("KDW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean CV"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("11.39%")),size = 3)
+
+VKK
+ggsave("KDWCV.png", VKK, width = 8, height = 10, units = "in")
+```
+```{r}
+CVC<- read_csv("E:/论文/EI/GCCP.csv",locale=locale(encoding="GBK"))
+CVC <- CVC[!is.na(CVC$CV), ]
+my_colormap <- colorRampPalette(rev(brewer.pal(8,'Spectral')))(32)
+VC <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data = CVC,aes(Longitude, Latitude, fill = CV))+
+  scale_fill_gradientn(colours = my_colormap,labels = label_number(accuracy = 0.01))+
+  labs(colour = "CV") +
+  theme(
+    panel.grid=element_blank(), 
+    panel.background=element_blank(),
+    panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA),
+    #legend.position = c(0.11,0.3)
+  )
+
+VC
+
+VCC<-VC+ annotate("text", x = -150 , y = -10,label= ("KCW model"),size = 3)+  annotate("text", x = -150 , y = -20,label= ("Global Mean CV"),size = 3)+annotate("text", x = -150 , y = -32,label= expression(paste("11.41%")),size = 3)
+
+VCC
+ggsave("SCWCV.png", VCC, width = 8, height = 10, units = "in")
+```
+```{r}
+UCT<- read_csv("E:/论文/EI/globalDataT.csv",locale=locale(encoding="GBK"))
+UCK<- read_csv("E:/论文/EI/GK.csv",locale=locale(encoding="GBK"))
+UCC<- read_csv("E:/论文/EI/GC.csv",locale=locale(encoding="GBK"))
+
+UCK$Uncertainty <- (UCK$K_pred-UCT$Average_Predictions)/UCT$Average_Predictions
+UCK_no <- UCK[!is.na(UCK$Uncertainty), ]
+
+mean(UCK_no$Uncertainty,na.rm = T)
+max(UCK_no$Uncertainty,na.rm = T)
+min(UCK_no$Uncertainty,na.rm = T)
+
+UCK1 <- subset(UCK_no, Measure_Month==1 )
+UCK2 <- subset(UCK_no, Measure_Month==2 )
+UCK3 <- subset(UCK_no, Measure_Month==3 )
+UCK4 <- subset(UCK_no, Measure_Month==4 )
+UCK5 <- subset(UCK_no, Measure_Month==5 )
+UCK6 <- subset(UCK_no, Measure_Month==6 )
+UCK7 <- subset(UCK_no, Measure_Month==7 )
+UCK8 <- subset(UCK_no, Measure_Month==8 )
+UCK9 <- subset(UCK_no, Measure_Month==9 )
+UCK10 <- subset(UCK_no, Measure_Month==10 )
+UCK11 <- subset(UCK_no, Measure_Month==11 )
+UCK12 <- subset(UCK_no, Measure_Month==12 )
+
+
+UCK1$Uncertainty <-(UCK1$Uncertainty+UCK2$Uncertainty+UCK3$Uncertainty+UCK4$Uncertainty+
+                    UCK5$Uncertainty+UCK6$Uncertainty+UCK7$Uncertainty+
+                    UCK8$Uncertainty+UCK9$Uncertainty+UCK10$Uncertainty+
+                    UCK11$Uncertainty+UCK12$Uncertainty)/12
+
+my_colormap <- colorRampPalette(rev(brewer.pal(9,'BrBG')))(32)
+UCKK <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data =UCK1,aes(Longitude, Latitude, fill = Uncertainty))+
+#  scale_fill_gradientn(colours = my_colormap,n.breaks=5,limits=c(-0.5,0.8))+labs( "Uncertainty")+
+  scale_fill_gradient2( low = "red",mid = "white",high = "#397DB7",midpoint = 0)+labs( "Uncertainty")+
+  theme(
+        panel.grid=element_blank(), 
+        panel.background=element_blank(),
+        panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA)
+        #legend.position = c(0.11,0.3)
+        ) 
+UCKK
+
+UCKKK <- UCKK+ annotate("text", x = -150 , y = -10,label= ("TNW model"),size = 3)+ annotate("text", x = -150 , y = -18,label= ("vs."),size = 3)+ annotate("text", x = -150 , y = -26,label= ("KDW model"),size = 3)
+UCKKK
+
+ggsave("UCKKK.png", UCKKK, width = 8, height = 10, units = "in")
+```
+
+```{r}
+UCC$Uncertainty <- (UCC$C_pred-UCT$Average_Predictions)/UCT$Average_Predictions
+UCC_no <- UCC[!is.na(UCC$Uncertainty), ]
+
+mean(UCC_no$Uncertainty,na.rm = T)
+max(UCC_no$Uncertainty,na.rm = T)
+min(UCC_no$Uncertainty,na.rm = T)
+
+UCC1 <- subset(UCC_no, Measure_Month==1 )
+UCC2 <- subset(UCC_no, Measure_Month==2 )
+UCC3 <- subset(UCC_no, Measure_Month==3 )
+UCC4 <- subset(UCC_no, Measure_Month==4 )
+UCC5 <- subset(UCC_no, Measure_Month==5 )
+UCC6 <- subset(UCC_no, Measure_Month==6 )
+UCC7 <- subset(UCC_no, Measure_Month==7 )
+UCC8 <- subset(UCC_no, Measure_Month==8 )
+UCC9 <- subset(UCC_no, Measure_Month==9 )
+UCC10 <- subset(UCC_no, Measure_Month==10 )
+UCC11 <- subset(UCC_no, Measure_Month==11 )
+UCC12 <- subset(UCC_no, Measure_Month==12 )
+
+
+UCC1$Uncertainty <-(UCC1$Uncertainty+UCC2$Uncertainty+UCC3$Uncertainty+UCC4$Uncertainty+
+                    UCC5$Uncertainty+UCC6$Uncertainty+UCC7$Uncertainty+
+                    UCC8$Uncertainty+UCC9$Uncertainty+UCC10$Uncertainty+
+                    UCC11$Uncertainty+UCC12$Uncertainty)/12
+
+my_colormap <- colorRampPalette(rev(brewer.pal(9,'BrBG')))(32)
+UCCC <- ggplot() + 
+  geom_sf() + 
+  geom_tile(data =UCC1,aes(Longitude, Latitude, fill = Uncertainty))+
+  #scale_fill_gradientn(colours = my_colormap,n.breaks=5,limits=c(-0.8,0.8))+labs( "Uncertainty")+
+  scale_fill_gradient2( low = "red",mid = "white",high = "#397DB7",midpoint = 0)+labs( "Uncertainty")+
+  theme(
+        panel.grid=element_blank(), 
+        panel.background=element_blank(),
+        panel.border = element_rect(linetype = "solid", linewidth = 1,fill = NA)
+        #legend.position = c(0.11,0.3)
+        ) 
+#GABCU<-GABCU+ annotate("text", x = -120 , y = -20,label= expression(paste("Global mean Rs"," ","(",g," ","C"," ", m^-2," ", "day"^-1,")")))
+UCCC
+
+UCCCC <- UCCC+ annotate("text", x = -150 , y = -10,label= ("TNW model"),size = 3)+ annotate("text", x = -150 , y = -18,label= ("vs."),size = 3)+ annotate("text", x = -150 , y = -26,label= ("SCW model"),size = 3)
+UCCCC
+
+ggsave("UCCCC.png", UCCCC, width = 8, height = 10, units = "in")
+```
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
